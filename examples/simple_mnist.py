@@ -4,6 +4,10 @@ from __future__ import print_function
 Light-weight demo of SimpleSharpener, Spiking_BRelu, and Softmax_Decode for a fully connected net on mnist.
 """
 
+import site
+import sys
+site.addsitedir('C:/Users/joaro/Documents/GitHub/Whetstone')
+
 import os
 import numpy as np
 import keras

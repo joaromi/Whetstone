@@ -6,6 +6,10 @@ Light-weight demo of SimpleSharpener, Spiking_BRelu, and Softmax_Decode for a fu
 
 import os
 
+# import site
+# import sys
+# site.addsitedir('C:/Users/joaro/Documents/GitHub/Whetstone')
+
 import numpy as np
 import keras
 from keras.datasets import mnist

@@ -1,0 +1,9 @@
+{
+    "train_loss": 3.6452141398710106e-05,
+    "train_accuracy": 1.0,
+    "sharpness": [
+        1.0,
+        1.0,
+        1.0
+    ]
+}

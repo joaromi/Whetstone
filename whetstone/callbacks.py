@@ -456,7 +456,7 @@ class WhetstoneLogger(Callback):
         if not os.path.exists(epoch_path):
             os.makedirs(epoch_path)
         # Store general logs in a human-readable form.
-        logs_ = {'train_loss':logs['loss'], 'train_accuracy':logs['acc']}
+        logs_ = {'train_loss':logs['loss'], 'train_accuracy':logs['accuracy']}
         if self.sharpener is not None:
             logs_['sharpness'] = self.sharpener.sharpness
         if self.test_set is not None:
@@ -467,7 +467,7 @@ class WhetstoneLogger(Callback):
                 logs_['test_loss_spiking'], logs_['test_accuracy_spiking'] = self.model.evaluate(x_test, y_test, verbose=0)[0:2]
                 self.sharpener.set_layer_sharpness(values=logs_['sharpness']) # restore
         log_path = os.path.join(epoch_path, 'log.json')
-        with open(log_path, 'wb') as f:
+        with open(log_path, 'w') as f:
             json.dump(logs_, f, indent=4)
         if self.log_weights:
             self.model.save(os.path.join(epoch_path, 'model_epoch_'+str(epoch)+'.h5'))
