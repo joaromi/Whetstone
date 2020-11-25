@@ -54,6 +54,7 @@ logger = WhetstoneLogger(logdir=log_dir, sharpener=adaptive)
 max_epochs = 100
 
 model.compile(loss='categorical_crossentropy', optimizer=Adadelta(lr=4.0, rho=0.95, epsilon=1e-8, decay=0.0), metrics=['accuracy'])
+model.summary()
 model.fit(x_train, y_train, epochs=max_epochs, callbacks=[adaptive, logger])
 
 print(model.evaluate(x_test, y_test))

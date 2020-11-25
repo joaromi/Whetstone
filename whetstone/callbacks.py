@@ -20,7 +20,7 @@ class Sharpener(Callback):
         verbose: Boolean, if ``True``, prints status updates during training.
     """
     def __init__(self, bottom_up=True, verbose=False):
-        super(Callback, self).__init__()
+        super(Sharpener, self).__init__()
         assert type(bottom_up) is bool
         assert type(verbose) is bool
         self.bottom_up = bottom_up
@@ -66,6 +66,63 @@ class Sharpener(Callback):
             value: Float, value between 0.0 and 1.0 inclusive that specifies the sharpness of the model.
         """
         values = set_model_sharpness(model=self.model, value=value, bottom_up=self.bottom_up)
+        self.sharpness = values
+
+class Sharpen_bbone(Callback):
+    """Absract base class used for different sharpening callbacks.
+
+    # Arguments
+        bottom_up: Boolean, if ``True``, sharpens one layer at a time, 
+            sequentially, starting with the first. If ``False``, sharpens all layers uniformly.
+        verbose: Boolean, if ``True``, prints status updates during training.
+    """
+    def __init__(self, bottom_up=True, verbose=False):
+        super(Sharpen_bbone, self).__init__()
+        assert type(bottom_up) is bool
+        assert type(verbose) is bool
+        self.bottom_up = bottom_up
+        self.verbose = verbose
+        self.current_epoch = 0
+
+    def get_config(self):
+        config = {'bottom_up':self.bottom_up, 'verbose':self.verbose}
+        return config
+
+    def on_train_begin(self, logs=None):
+        self.sharpness = [0.0 for _ in range(self._num_spiking_layers())]
+        self.current_epoch = 0
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.current_epoch = epoch
+        if all([i == 1.0 for i in self.sharpness]):
+            self.model.stop_training = True
+
+    def _spiking_layer_indices(self):
+        """Returns indices of layers that can be sharpened. """
+        return get_spiking_layer_indices(model=self.model.layers[0].layers[0])
+
+    def _num_spiking_layers(self):
+        """Returns number of layers in self.model that can be sharpened. """
+        return len(self._spiking_layer_indices())
+
+    def set_layer_sharpness(self, values):
+        """Sets the sharpness values of all spiking layers.
+
+        # Arguments
+            values: A list of sharpness values (between 0.0 and 1.0 inclusive) for each 
+                spiking layer in the same order as their indices.
+        """
+        set_layer_sharpness(model=self.model.layers[0].layers[0], values=values)
+        self.sharpness = values
+
+    def set_model_sharpness(self, value):
+        """Sets the sharpness of the whole model either in a bottom_up or uniform fashion depending on the
+           value of the bottom_up instance variable.
+
+        # Arguments
+            value: Float, value between 0.0 and 1.0 inclusive that specifies the sharpness of the model.
+        """
+        values = set_model_sharpness(model=self.model.layers[0].layers[0], value=value, bottom_up=self.bottom_up)
         self.sharpness = values
 
 
@@ -361,6 +418,154 @@ class AdaptiveSharpener(Sharpener):
 
     def on_epoch_end(self, epoch, logs=None):
         super(AdaptiveSharpener, self).on_epoch_end(epoch, logs)
+        self.wait = False # reset overshoot protection flag
+        improved, degraded = False, False
+        percent_change = (logs['loss'] - self.reference_loss) / self.reference_loss
+        if percent_change >= self.sig_increase:
+            degraded = True
+        elif percent_change <= -self.sig_decrease:
+            improved = True
+        if self.current_epoch >= self.min_init_epochs - 1:
+            if improved:
+                self.reference_loss = logs['loss']
+                self.epochs_no_improvement = 0
+            else: # degraded or remained unchanged
+                self.epochs_no_improvement += 1
+            if self.sharpening:
+                if degraded:
+                    self.reference_loss = logs['loss']
+                    self.epochs_no_improvement = 0
+                    self.sharpening = False
+            else: # not sharpening
+                if self.epochs_no_improvement > self.patience:
+                    self.reference_loss = logs['loss']
+                    self.epochs_no_improvement = 0
+                    self.sharpening = True
+        else: # not time to consider sharpening yet.
+            self.reference_loss = logs['loss']
+        if epoch == 0:
+            self.batches_per_epoch = self.batch + 1
+        if self.verbose:
+            print('\nloss =', logs['loss'])
+            print('current_reference_loss =', self.reference_loss)
+            print('percent_change =', percent_change)
+            print('improved =', improved, 'degraded =', degraded) 
+            print('epochs_not_improved =', self.epochs_no_improvement) 
+            print('sharpening =', self.sharpening)
+            print('sharpness =', [round(i, 4) for i in self.sharpness])
+
+    def on_batch_end(self, batch, logs=None):
+        if self.sharpening:
+            self._perform_sharpening(logs)
+        self.batch = batch
+
+
+
+class AdaptiveSharpener_FPN(Sharpen_bbone):
+    """Sharpens a model automatically, using training loss to control the process.
+
+    # Arguments
+        min_init_epochs: Integer, minimum number of epochs to train before sharpening begins.
+        rate: Float, amount to sharpen a layer per epoch.
+        cz_rate: Float, rate of sharpening in Critical Zone, which is when layer sharpness >= ``critical``.
+        critical: Float, critical sharpness after which to apply cz_rate.
+        first_layer_relative_rate: Float, percentage of normal sharpening rate to use in first layer.
+        patience: Integer, how many epochs to wait for significant improvement.
+        sig_increase: Float, percent increase in loss considered significant.
+        sig_decrease: Float, percent decrease in loss considered significant.
+    """
+    def __init__(self, min_init_epochs=10, 
+                 rate=0.25, 
+                 cz_rate=0.126, 
+                 critical=0.75, 
+                 first_layer_relative_rate=1.0, 
+                 patience=1, 
+                 sig_increase=0.15, 
+                 sig_decrease=0.15,
+                 subnet_idx=0,
+                  
+                 **kwargs):
+        super(AdaptiveSharpener_FPN, self).__init__(**kwargs)
+        assert type(min_init_epochs) is int and min_init_epochs >= 1
+        assert type(rate) is float and rate > 0.0 and rate <= 1.0
+        assert type(cz_rate) is float and cz_rate > 0.0 and cz_rate <= 1.0
+        assert type(critical) is float and critical >= 0.0 and critical <= 1.0
+        assert type(first_layer_relative_rate) is float and first_layer_relative_rate > 0.0
+        assert type(patience) is int and patience >= 0
+        assert type(sig_increase) is float and sig_increase > 0.0
+        assert type(sig_decrease) is float and sig_decrease > 0.0
+        self.min_init_epochs = min_init_epochs
+        self.rate = rate
+        self.cz_rate = cz_rate
+        self.critical = critical
+        self.first_layer_relative_rate = first_layer_relative_rate
+        self.patience = patience
+        self.sig_increase = sig_increase
+        self.sig_decrease = sig_decrease
+        self.subnet_idx = subnet_idx
+        try:
+            self.batches_per_epoch = batches_per_epoch
+        except:
+            pass
+
+    def get_config(self):
+        config = {'min_init_epochs':self.min_init_epochs, 
+                  'rate':self.rate, 
+                  'cz_rate':self.cz_rate,
+                  'critical':self.critical,
+                  'first_layer_relative_rate':self.first_layer_relative_rate,
+                  'patience':self.patience,
+                  'sig_increase':self.sig_increase,
+                  'sig_decrease':self.sig_decrease,
+                 }
+        try:
+            config['batches_per_epoch'] = self.batches_per_epoch
+        except:
+            pass 
+        base_config = super(AdaptiveSharpener, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+    def on_train_begin(self, logs=None):
+        super(AdaptiveSharpener_FPN, self).on_train_begin(logs)
+        self.sharpening = False # state variable.
+        self.reference_loss = 1000000.0 # loss after last significant change.
+        self.epochs_no_improvement = 0  # number of epochs since the loss improved significantly.
+        self.batch = 0
+        self.batches_per_epoch = None
+        self.wait = False
+        
+    def _perform_sharpening(self, logs=None):
+        unfinished_layers = [idx for idx, s in enumerate(self.sharpness) if s < 1.0]
+        if len(unfinished_layers) > 0:
+            if self.bottom_up:
+                if not self.wait:
+                    sharpen_idx = min(unfinished_layers)
+                    sharpen_amount = self.rate
+                    if self.sharpness[sharpen_idx] >= self.critical:
+                        sharpen_amount = self.cz_rate
+                    if sharpen_idx == 0: # if first spiking layer
+                        sharpen_amount *= self.first_layer_relative_rate
+                    sharpen_amount *= (1.0/float(self.batches_per_epoch))
+                    self.sharpness[sharpen_idx] = min(1.0, self.sharpness[sharpen_idx] + sharpen_amount)
+                    if 1.0 - self.sharpness[sharpen_idx] < 0.001:
+                        self.sharpness[sharpen_idx] = 1.0
+                    if self.sharpness[sharpen_idx] == 1.0:
+                        self.wait = True
+            else: # uniform sharpen
+                sharpen_amount = self.rate
+                if self.sharpness[0] >= self.critical:
+                    sharpen_amount = self.cz_rate
+                sharpen_amount *= (1.0/float(self.batches_per_epoch))
+                new_uniform_sharpness = min(1.0, self.sharpness[0] + sharpen_amount)
+                if 1.0 - new_uniform_sharpness < 0.000001:
+                    new_uniform_sharpness = 1.0
+                self.sharpness = [new_uniform_sharpness for _ in range(len(self.sharpness))]
+            self.set_layer_sharpness(values=self.sharpness)
+        else:
+            self.sharpening = False
+
+    def on_epoch_end(self, epoch, logs=None):
+        super(AdaptiveSharpener_FPN, self).on_epoch_end(epoch, logs)
         self.wait = False # reset overshoot protection flag
         improved, degraded = False, False
         percent_change = (logs['loss'] - self.reference_loss) / self.reference_loss
