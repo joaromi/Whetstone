@@ -9,7 +9,7 @@ from keras.utils import CustomObjectScope
 from whetstone.layers import spikingLayersDict, Spiking
 
 
-def load_model(filepath):
+def load_model(filepath, custom_objects=None):
     """Loads a keras model that can contain custom Whetstone layers.
 
     Loads and returns the Keras/Whetstone model from a .h5 file at ``filepath``, handling custom layer
@@ -21,7 +21,10 @@ def load_model(filepath):
     # Returns
         A keras Model.
     """
-    with CustomObjectScope(spikingLayersDict):
+    custom_dict = spikingLayersDict
+    if custom_objects is not None:
+        custom_dict.update(custom_objects)
+    with CustomObjectScope(custom_dict):
         return keras.models.load_model(filepath)
 
 
