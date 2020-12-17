@@ -87,6 +87,8 @@ class Sharpen_bbone(Callback):
         self.save_dir = save_dir
         self.subnet_idx = subnet_idx
         self.net = None
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
     
     def target_subnet(self):
         subnet = self.model
@@ -107,7 +109,7 @@ class Sharpen_bbone(Callback):
     def on_batch_end(self, batch, logs=None):
         self.current_batch = batch
         if all([i == 1.0 for i in self.sharpness]):
-            self.model.save_weights(os.path.join(self.save_dir, "weights" + "_epoch_{epoch}"))
+            self.model.save_weights(os.path.join(self.save_dir, "weights" + "_epoch_{self.current_epoch}"+ "_batch_{batch}"))
             self.model.stop_training = True
 
     def on_epoch_end(self, epoch, logs=None):
@@ -615,6 +617,11 @@ class AdaptiveSharpener_FPN(Sharpen_bbone):
             print('assessments with no improvement =', self.assess_with_no_improvement,'/',self.patience) 
             print('sharpening =', self.sharpening)
             print('sharpness =', [round(i, 4) for i in self.sharpness])
+
+        with open(os.path.join(self.save_dir, "sharpen_logs.txt"), "a+") as logfile:
+            logfile.write("{} {} {:4.6f} {:4.6f} {:4.6f}\n".format(
+                self.current_epoch, self.current_batch, sum(self.sharpness), logs['loss'], percent_change)   
+            )
 
 
 class WhetstoneLogger(Callback):
