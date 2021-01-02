@@ -110,4 +110,10 @@ def set_model_sharpness(model, value, bottom_up):
         set_layer_sharpness(model=model, values=values)
     return values
 
+def target_subnet(model, subnet_idx):
+        subnet = model
+        for idx in subnet_idx:
+            subnet = subnet.layers[idx]
+        return subnet
+
 

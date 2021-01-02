@@ -68,84 +68,6 @@ class Sharpener(Callback):
         values = set_model_sharpness(model=self.model, value=value, bottom_up=self.bottom_up)
         self.sharpness = values
 
-class Sharpen_bbone(Callback):
-    """Absract base class used for different sharpening callbacks.
-
-    # Arguments
-        bottom_up: Boolean, if ``True``, sharpens one layer at a time, 
-            sequentially, starting with the first. If ``False``, sharpens all layers uniformly.
-        verbose: Boolean, if ``True``, prints status updates during training.
-    """
-    def __init__(self, bottom_up=True, verbose=False, save_dir='./', subnet_idx = []):
-        super(Sharpen_bbone, self).__init__()
-        assert type(bottom_up) is bool
-        assert type(verbose) is bool
-        self.bottom_up = bottom_up
-        self.verbose = verbose
-        self.current_epoch = 0
-        self.current_batch = 0
-        self.save_dir = save_dir
-        self.subnet_idx = subnet_idx
-        self.net = None
-        if not os.path.exists(save_dir):
-            os.mkdir(save_dir)
-    
-    def target_subnet(self):
-        subnet = self.model
-        for idx in self.subnet_idx:
-            subnet = subnet.layers[idx]
-        self.net = subnet
-
-    def get_config(self):
-        config = {'bottom_up':self.bottom_up, 'verbose':self.verbose}
-        return config
-
-    def on_train_begin(self, logs=None):
-        self.target_subnet()
-        self.sharpness = [0.0 for _ in range(self._num_spiking_layers())]
-        self.current_epoch = 0
-        self.current_batch = 0
-
-    def on_batch_end(self, batch, logs=None):
-        self.current_batch = batch
-        if all([i == 1.0 for i in self.sharpness]):
-            self.model.save_weights(os.path.join(self.save_dir, "weights" + "_epoch_{self.current_epoch}"+ "_batch_{batch}"))
-            self.model.stop_training = True
-
-    def on_epoch_end(self, epoch, logs=None):
-        self.current_epoch = epoch
-        if all([i == 1.0 for i in self.sharpness]):
-            self.model.save_weights(os.path.join(self.save_dir, "weights" + "_epoch_{epoch}"))
-            self.model.stop_training = True
-
-    def _spiking_layer_indices(self):
-        """Returns indices of layers that can be sharpened. """
-        return get_spiking_layer_indices(model=self.net)
-
-    def _num_spiking_layers(self):
-        """Returns number of layers in self.model that can be sharpened. """
-        return len(self._spiking_layer_indices())
-
-    def set_layer_sharpness(self, values):
-        """Sets the sharpness values of all spiking layers.
-
-        # Arguments
-            values: A list of sharpness values (between 0.0 and 1.0 inclusive) for each 
-                spiking layer in the same order as their indices.
-        """
-        set_layer_sharpness(model=self.net, values=values)
-        self.sharpness = values
-
-    def set_model_sharpness(self, value):
-        """Sets the sharpness of the whole model either in a bottom_up or uniform fashion depending on the
-           value of the bottom_up instance variable.
-
-        # Arguments
-            value: Float, value between 0.0 and 1.0 inclusive that specifies the sharpness of the model.
-        """
-        values = set_model_sharpness(model=self.net, value=value, bottom_up=self.bottom_up)
-        self.sharpness = values
-
 
 class SimpleSharpener(Sharpener):
     """Basic sharpener that sharpens each layer in a set number of batches.
@@ -480,9 +402,98 @@ class AdaptiveSharpener(Sharpener):
             self._perform_sharpening(logs)
         self.batch = batch
 
+################################################################################################
+################################################################################################
+
+class Sharpen_subnet(Callback):
+    """Absract base class used for different sharpening callbacks.
+
+    # Arguments
+        bottom_up: Boolean, if ``True``, sharpens one layer at a time, 
+            sequentially, starting with the first. If ``False``, sharpens all layers uniformly.
+        verbose: Boolean, if ``True``, prints status updates during training.
+    """
+    def __init__(self, bottom_up=True, verbose=False, save_dir='./', subnet_idx = []):
+        super(Sharpen_subnet, self).__init__()
+        assert type(bottom_up) is bool
+        assert type(verbose) is bool
+        self.bottom_up = bottom_up
+        self.verbose = verbose
+        self.current_epoch = 0
+        self.current_batch = 0
+        self.save_dir = save_dir
+        self.subnet_idx = subnet_idx
+        self.net = None
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+    
+    def target_subnet(self):
+        subnet = self.model
+        for idx in self.subnet_idx:
+            subnet = subnet.layers[idx]
+        self.net = subnet
+
+    def get_config(self):
+        config = {'bottom_up':self.bottom_up, 'verbose':self.verbose}
+        return config
+
+    def on_train_begin(self, logs=None):
+        self.target_subnet()
+        self.sharpness = [0.0 for _ in range(self._num_spiking_layers())]
+        self.current_epoch = 0
+        self.current_batch = 0
+
+    def on_batch_end(self, batch, logs=None):
+        self.current_batch = batch
+        if all([i == 1.0 for i in self.sharpness]):
+            self.model.save_weights(os.path.join(self.save_dir, "weights" + "_FINAL"))
+            self.model.stop_training = True
+
+    def on_epoch_begin(self, epoch, logs=None):
+        self.current_epoch = epoch
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.current_epoch = epoch
+        WS_stats = {
+            'sharpness': self.sharpness
+        }
+        self.model.save_weights(os.path.join(self.save_dir, "weights" + "_epoch_{}".format(epoch)))
+        with open(os.path.join(self.save_dir, "WS_stats" + "_epoch_{}".format(epoch)), str('w')) as f:
+            json.dump(WS_stats, f)
+        if all([i == 1.0 for i in self.sharpness]):
+            self.model.save_weights(os.path.join(self.save_dir, "weights" + "_FINAL"))
+            self.model.stop_training = True
+
+    def _spiking_layer_indices(self):
+        """Returns indices of layers that can be sharpened. """
+        return get_spiking_layer_indices(model=self.net)
+
+    def _num_spiking_layers(self):
+        """Returns number of layers in self.model that can be sharpened. """
+        return len(self._spiking_layer_indices())
+
+    def set_layer_sharpness(self, values):
+        """Sets the sharpness values of all spiking layers.
+
+        # Arguments
+            values: A list of sharpness values (between 0.0 and 1.0 inclusive) for each 
+                spiking layer in the same order as their indices.
+        """
+        set_layer_sharpness(model=self.net, values=values)
+        self.sharpness = values
+
+    def set_model_sharpness(self, value):
+        """Sets the sharpness of the whole model either in a bottom_up or uniform fashion depending on the
+           value of the bottom_up instance variable.
+
+        # Arguments
+            value: Float, value between 0.0 and 1.0 inclusive that specifies the sharpness of the model.
+        """
+        values = set_model_sharpness(model=self.net, value=value, bottom_up=self.bottom_up)
+        self.sharpness = values
 
 
-class AdaptiveSharpener_FPN(Sharpen_bbone):
+class AdaptiveSharpener_J(Sharpen_subnet):
 
     def __init__(self, min_init_batches=10, 
                 batch_interval=10,
@@ -492,9 +503,10 @@ class AdaptiveSharpener_FPN(Sharpen_bbone):
                 first_layer_relative_rate=1.0, 
                 patience=1, 
                 sig_increase=0.15, 
-                sig_decrease=0.15,                  
+                sig_decrease=0.15,
+                start_sharpening=True,                  
                 **kwargs):
-        super(AdaptiveSharpener_FPN, self).__init__(**kwargs)
+        super(AdaptiveSharpener_J, self).__init__(**kwargs)
         assert type(min_init_batches) is int and min_init_batches >= 1
         assert type(rate) is float and rate > 0.0 and rate <= 1.0
         assert type(cz_rate) is float and cz_rate > 0.0 and cz_rate <= 1.0
@@ -513,6 +525,7 @@ class AdaptiveSharpener_FPN(Sharpen_bbone):
         self.sig_decrease = sig_decrease
         self.batch_interval = batch_interval
         self.interval_counter = 0
+        self.start_sharpening = start_sharpening
 
     def get_config(self):
         config = {'min_init_batches':self.min_init_batches, 
@@ -524,17 +537,20 @@ class AdaptiveSharpener_FPN(Sharpen_bbone):
                   'sig_increase':self.sig_increase,
                   'sig_decrease':self.sig_decrease,
                  }
-        base_config = super(AdaptiveSharpener_FPN, self).get_config()
+        base_config = super(AdaptiveSharpener_J, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
     def on_train_begin(self, logs=None):
-        super(AdaptiveSharpener_FPN, self).on_train_begin(logs)
-        self.sharpening = False # state variable.
+        super(AdaptiveSharpener_J, self).on_train_begin(logs)
+        self.sharpening = self.start_sharpening # state variable.
         self.reference_loss = 1000000.0 # loss after last significant change.
         self.assess_with_no_improvement = 0  # number of assessments since the loss improved significantly.
         self.batch = 0
         self.wait = False
         self.interval_counter = 0
+
+        with open(os.path.join(self.save_dir, "sharpen_logs.txt"), "w") as logfile:
+            logfile.write("Epoch   Batch   Sharp(%)      Sharp    loss  ref.loss   loss_chg.  sharpening\n")
         
     def _perform_sharpening(self, logs=None):
         unfinished_layers = [idx for idx, s in enumerate(self.sharpness) if s < 1.0]
@@ -567,11 +583,11 @@ class AdaptiveSharpener_FPN(Sharpen_bbone):
             self.sharpening = False
 
     def on_epoch_end(self, epoch, logs=None):
-        super(AdaptiveSharpener_FPN, self).on_epoch_end(epoch, logs)
+        super(AdaptiveSharpener_J, self).on_epoch_end(epoch, logs)
         self.assess_sharpening(logs)
 
     def on_batch_end(self, batch, logs=None):
-        super(AdaptiveSharpener_FPN, self).on_batch_end(batch, logs)
+        super(AdaptiveSharpener_J, self).on_batch_end(batch, logs)
         if self.sharpening:
             self._perform_sharpening(logs)
 
@@ -619,8 +635,9 @@ class AdaptiveSharpener_FPN(Sharpen_bbone):
             print('sharpness =', [round(i, 4) for i in self.sharpness])
 
         with open(os.path.join(self.save_dir, "sharpen_logs.txt"), "a+") as logfile:
-            logfile.write("{} {} {:4.6f} {:4.6f} {:4.6f}\n".format(
-                self.current_epoch, self.current_batch, sum(self.sharpness), logs['loss'], percent_change)   
+            logfile.write("{:5d}  {:6d}   {:>7.4f}   {:>9.5f} {:>7.3f}   {:>7.3f}  {:>9.5f}   {}  {}\n".format(
+                self.current_epoch, self.current_batch, sum(self.sharpness)/len(self.sharpness), sum(self.sharpness), 
+                logs['loss'], self.reference_loss, percent_change, self.sharpening, self.assess_with_no_improvement)   
             )
 
 
