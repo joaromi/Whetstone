@@ -504,7 +504,7 @@ class AdaptiveSharpener_J(Sharpen_subnet):
                 patience=1, 
                 sig_increase=0.15, 
                 sig_decrease=0.15,
-                start_sharpening=True,                  
+                start_sharpening=False,                  
                 **kwargs):
         super(AdaptiveSharpener_J, self).__init__(**kwargs)
         assert type(min_init_batches) is int and min_init_batches >= 1
@@ -542,7 +542,7 @@ class AdaptiveSharpener_J(Sharpen_subnet):
 
     def on_train_begin(self, logs=None):
         super(AdaptiveSharpener_J, self).on_train_begin(logs)
-        self.sharpening = self.start_sharpening # state variable.
+        self.sharpening = False # state variable.
         self.reference_loss = 1000000.0 # loss after last significant change.
         self.assess_with_no_improvement = 0  # number of assessments since the loss improved significantly.
         self.batch = 0
@@ -618,7 +618,8 @@ class AdaptiveSharpener_J(Sharpen_subnet):
                     self.reference_loss = logs['loss']
                     self.sharpening = False
             else: # not sharpening
-                if self.assess_with_no_improvement > self.patience:
+                if self.assess_with_no_improvement > self.patience or self.start_sharpening:
+                    self.start_sharpening=False
                     self.reference_loss = logs['loss']
                     self.assess_with_no_improvement = 0
                     self.sharpening = True
